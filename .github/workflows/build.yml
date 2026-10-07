@@ -41,6 +41,9 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
+      - name: Bundler installieren
+        run: gem install bundler -v 4.0.22
+
       - name: Abhaengigkeiten installieren
         run: bundle install
 

@@ -29,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Bundler installieren
+        run: gem install bundler -v 4.0.22
+
       - name: Abhaengigkeiten installieren
         run: bundle install
 
@@ -60,6 +63,9 @@ jobs:
     if: ${{ (needs.create_certs.outputs.new_certificate_needed == 'true' && vars.ENABLE_NUKE_CERTS == 'true') || vars.FORCE_NUKE_CERTS == 'true' }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Bundler installieren
+        run: gem install bundler -v 4.0.22
 
       - name: Abhaengigkeiten installieren
         run: bundle install
