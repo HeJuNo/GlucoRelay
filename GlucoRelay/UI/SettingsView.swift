@@ -5,22 +5,29 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage(GlucoseUnit.storageKey) private var unitRaw = GlucoseUnit.mmolL.rawValue
 
-    @State private var nsURL = ""
-    @State private var nsToken = ""
+    // Nightscout fields
+    @State private var nsURL: String = ""
+    @State private var nsToken: String = ""
     @State private var showToken = false
+    @State private var saved = false
+    @State private var validationError: String? = nil
+
+    // Connection test
     @State private var testing = false
-    @State private var testResult: ConnectionTestResult?
+    @State private var testResult: ConnectionTestResult? = nil
+
+    // Device pairing sheet
     @State private var showPairing = false
 
-    private var credentialsChanged: Bool {
-        NightscoutSync.normalizedBase(nsURL) != NightscoutSync.normalizedBase(KeychainManager.nightscoutURL ?? "")
-            || nsToken.trimmingCharacters(in: .whitespacesAndNewlines) != (KeychainManager.accessToken ?? "")
-    }
+    @FocusState private var urlFocused: Bool
+    @FocusState private var tokenFocused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
-                nightscoutSection
+                nightscoutConnectionSection
+                saveSection
+                connectionTestSection
                 unitSection
                 healthKitSection
                 DeviceListView(showPairing: $showPairing)
@@ -38,85 +45,115 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: Nightscout
+    // MARK: - Nightscout Connection
 
-    private var nightscoutSection: some View {
-        Section {
-            TextField("https://my-nightscout.example.com", text: $nsURL)
-                .keyboardType(.URL)
-                .textContentType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            HStack {
-                Group {
-                    if showToken {
-                        TextField("Access token", text: $nsToken)
-                    } else {
-                        SecureField("Access token", text: $nsToken)
-                    }
-                }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.body.monospaced())
-                Button { showToken.toggle() } label: {
-                    Image(systemName: showToken ? "eye.slash" : "eye")
-                }
-                .buttonStyle(.borderless)
+    private var nightscoutConnectionSection: some View {
+        Section(header: Text("Nightscout Connection")) {
+            // URL
+            VStack(alignment: .leading, spacing: 4) {
+                Text("URL")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("https://my-nightscout.example.com", text: $nsURL)
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .focused($urlFocused)
             }
 
-            Button("Save") { saveCredentials() }
-                .disabled(!credentialsChanged)
-
-            Button {
-                Task { await runTest() }
-            } label: {
+            // Access Token
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Access Token")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 HStack {
-                    Text("Test connection")
-                    Spacer()
-                    if testing { ProgressView() }
-                }
-            }
-            .disabled(testing || nsURL.isEmpty || nsToken.isEmpty)
+                    Group {
+                        if showToken {
+                            TextField("e.g. name-1a2b3c4d5e6f7a8b", text: $nsToken)
+                        } else {
+                            SecureField("e.g. name-1a2b3c4d5e6f7a8b", text: $nsToken)
+                        }
+                    }
+                    .textContentType(.password)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .font(.body.monospaced())
+                    .focused($tokenFocused)
 
-            if let result = testResult {
-                testRow("Server reachable", ok: result.serverReachable, detail: result.serverReachableDetail)
-                if let info = result.serverInfo {
-                    testRow("Server", ok: nil, detail: info)
+                    Button {
+                        showToken.toggle()
+                    } label: {
+                        Image(systemName: showToken ? "eye.slash" : "eye")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(showToken ? "Hide token" : "Show token")
                 }
-                testRow("Access token", ok: result.serverReachable ? result.tokenValid : nil,
-                        detail: result.tokenSubject ?? (result.tokenValid ? "Valid" : (result.serverReachable ? "Invalid" : "Not tested")))
-                testRow("Read access", ok: result.tokenValid ? result.canRead : nil,
-                        detail: result.canReadDetail.isEmpty ? "Not tested" : result.canReadDetail)
-                testRow("Write access", ok: result.tokenValid ? result.canWrite : nil,
-                        detail: result.canWriteDetail.isEmpty ? "Not tested" : result.canWriteDetail)
+
+                if !nsToken.isEmpty && !NightscoutSync.looksLikeAccessToken(nsToken) {
+                    Label("Doesn't look like a Nightscout access token (format: name-1a2b3c4d5e6f7a8b). API secrets don't work here.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
-        } header: {
-            Text("Nightscout")
-        } footer: {
-            Text("Create an access token in Nightscout ▸ Admin Tools with the roles **readable** and **careportal**. URL and token are stored in the iOS Keychain. Readings are always uploaded in mg/dL.")
         }
     }
 
-    /// One row of the connection test: status icon + label, detail on the right.
-    /// `ok == nil` = not tested / informational.
-    private func testRow(_ label: String, ok: Bool?, detail: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: ok == nil ? "questionmark.circle.fill" : (ok! ? "checkmark.circle.fill" : "xmark.circle.fill"))
-                .foregroundStyle(ok == nil ? Theme.idle : (ok! ? Theme.connected : Theme.crimson))
-            Text(label)
-            Spacer(minLength: 12)
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(Theme.secondaryText)
-                .multilineTextAlignment(.trailing)
+    // MARK: - Save
+
+    private var saveSection: some View {
+        Section {
+            if let error = validationError {
+                Text(error)
+                    .foregroundStyle(.red)
+                    .font(.subheadline)
+            }
+
+            Button {
+                saveCredentials()
+            } label: {
+                HStack {
+                    Spacer()
+                    Text("Save")
+                        .font(.headline)
+                    Spacer()
+                }
+            }
+
+            if saved {
+                Label("Settings saved", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
         }
-        .font(.subheadline)
     }
 
     private func saveCredentials() {
-        KeychainManager.nightscoutURL = NightscoutSync.normalizedBase(nsURL)
-        KeychainManager.accessToken = nsToken
-        nsURL = KeychainManager.nightscoutURL ?? ""
+        validationError = nil
+        saved = false
+
+        let trimmedURL = nsURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else {
+            validationError = "Please enter a Nightscout URL."
+            return
+        }
+        let lc = trimmedURL.lowercased()
+        guard lc.hasPrefix("https://") || lc.hasPrefix("http://") else {
+            validationError = "URL must start with https://"
+            return
+        }
+        let trimmedToken = nsToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedToken.isEmpty else {
+            validationError = "Please enter an access token."
+            return
+        }
+
+        KeychainManager.nightscoutURL = NightscoutSync.normalizedBase(trimmedURL)
+        KeychainManager.accessToken = trimmedToken
+        nsURL = KeychainManager.nightscoutURL ?? trimmedURL
+        saved = true
+
         Task {
             await NightscoutSync.resetSession()
             await NightscoutSync.prefetchJWT()
@@ -124,16 +161,91 @@ struct SettingsView: View {
         }
     }
 
-    private func runTest() async {
-        testing = true
-        testResult = nil
-        let result = await NightscoutSync.testConnection(urlString: nsURL, token: nsToken)
-        testResult = result
-        testing = false
-        if result.ok && credentialsChanged { saveCredentials() }
+    // MARK: - Connection Test
+
+    private var connectionTestSection: some View {
+        Section {
+            Button {
+                runConnectionTest()
+            } label: {
+                HStack {
+                    Label("Test connection", systemImage: "network")
+                    Spacer()
+                    if testing { ProgressView() }
+                }
+            }
+            .disabled(testing)
+
+            if let result = testResult {
+                if let info = result.serverInfo {
+                    LabeledContent("Server", value: info)
+                        .font(.subheadline)
+                }
+                if let subject = result.subject {
+                    LabeledContent("Token", value: subject)
+                        .font(.subheadline)
+                }
+                testRow("Connection", status: result.reachable, detail: result.reachableDetail)
+                if result.reachable == .ok {
+                    testRow("Read", status: result.canRead, detail: result.readDetail)
+                    testRow("Write", status: result.canWrite, detail: result.writeDetail)
+                }
+            }
+        } header: {
+            Text("Connection Test")
+        } footer: {
+            Text("Tests the URL and access token (also before saving). Nothing is written to Nightscout during the test.")
+        }
     }
 
-    // MARK: Units
+    private func testRow(_ title: String,
+                         status: ConnectionTestResult.Status,
+                         detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon(for: status))
+                .foregroundStyle(color(for: status))
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func icon(for status: ConnectionTestResult.Status) -> String {
+        switch status {
+        case .ok:      return "checkmark.circle.fill"
+        case .failed:  return "xmark.circle.fill"
+        case .unknown: return "questionmark.circle.fill"
+        }
+    }
+
+    private func color(for status: ConnectionTestResult.Status) -> Color {
+        switch status {
+        case .ok:      return .green
+        case .failed:  return .red
+        case .unknown: return .orange
+        }
+    }
+
+    private func runConnectionTest() {
+        let url = nsURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty, !nsToken.isEmpty else {
+            validationError = "Enter URL and access token before testing."
+            return
+        }
+        validationError = nil
+        testing = true
+        testResult = nil
+        let token = nsToken
+        Task {
+            let result = await NightscoutSync.testConnection(urlString: url, token: token)
+            testResult = result
+            testing = false
+        }
+    }
+
+    // MARK: - Units
 
     private var unitSection: some View {
         Section {
@@ -144,13 +256,13 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
         } header: {
-            Text("Display unit")
+            Text("Display Unit")
         } footer: {
-            Text("Only changes how values are shown. Apple Health and Nightscout always receive the exact meter value.")
+            Text("Only changes how values are shown. Apple Health and Nightscout always receive the exact meter value in mg/dL.")
         }
     }
 
-    // MARK: HealthKit
+    // MARK: - HealthKit
 
     private var healthKitSection: some View {
         Section("Apple Health") {
@@ -158,7 +270,8 @@ struct SettingsView: View {
                 Image(systemName: "heart.fill").foregroundStyle(Theme.crimson)
                 Text("Write access")
                 Spacer()
-                Text(healthKitStatusText).foregroundStyle(healthKit.status == .authorized ? Theme.connected : Theme.secondaryText)
+                Text(healthKitStatusText)
+                    .foregroundStyle(healthKit.status == .authorized ? Theme.connected : Theme.secondaryText)
             }
             switch healthKit.status {
             case .notDetermined:
@@ -178,19 +291,19 @@ struct SettingsView: View {
 
     private var healthKitStatusText: String {
         switch healthKit.status {
-        case .authorized: "Allowed"
-        case .denied: "Denied"
-        case .notDetermined: "Not requested"
-        case .unavailable: "Unavailable"
+        case .authorized:    return "Allowed"
+        case .denied:        return "Denied"
+        case .notDetermined: return "Not requested"
+        case .unavailable:   return "Unavailable"
         }
     }
 
-    // MARK: About
+    // MARK: - About
 
     private var aboutSection: some View {
         Section("About") {
             LabeledContent("Version",
-                           value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
+                value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
             Text("GlucoRelay is not a medical device. Accu-Chek and Accu-Chek Guide are trademarks of Roche.")
                 .font(.caption)
                 .foregroundStyle(Theme.secondaryText)
