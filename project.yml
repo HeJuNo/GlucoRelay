@@ -35,8 +35,14 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic
+    # IMPORTANT: XcodeGen rewrites this file from `properties` on every
+    # `xcodegen generate`. Without `properties` it writes an EMPTY plist and the
+    # app ships without the HealthKit entitlement.
     entitlements:
       path: GlucoRelay.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.background-delivery: true
     dependencies:
       - sdk: HealthKit.framework
     info:

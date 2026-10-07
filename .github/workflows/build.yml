@@ -41,6 +41,15 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
+      - name: HealthKit-Entitlement pruefen
+        run: |
+          if ! grep -q "com.apple.developer.healthkit</key>" GlucoRelay.entitlements; then
+            echo "::error::GlucoRelay.entitlements enthaelt kein HealthKit-Entitlement (XcodeGen properties fehlen?)"
+            cat GlucoRelay.entitlements
+            exit 1
+          fi
+          cat GlucoRelay.entitlements
+
       - name: Bundler installieren
         run: gem install bundler -v 4.0.22
 
