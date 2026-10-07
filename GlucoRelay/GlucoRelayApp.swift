@@ -57,6 +57,7 @@ struct GlucoRelayApp: App {
                 .preferredColorScheme(.dark)
                 .tint(Theme.electricBlue)
                 .task {
+                    await services.healthKit.requestAuthorization()
                     await NightscoutSync.prefetchJWT()
                     services.syncQueue.trigger()
                 }

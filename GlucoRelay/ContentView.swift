@@ -10,8 +10,6 @@ struct ContentView: View {
                     .tabItem { Label("Glucose", systemImage: "drop.fill") }
                 HistoryView()
                     .tabItem { Label("History", systemImage: "list.bullet.rectangle") }
-                SettingsView()
-                    .tabItem { Label("Settings", systemImage: "gearshape.fill") }
             }
         } else {
             OnboardingView { hasCompletedOnboarding = true }
@@ -30,7 +28,7 @@ struct OnboardingView: View {
         ("antenna.radiowaves.left.and.right", "Put the meter in pairing mode",
          "On the meter open Settings ▸ Wireless ▸ Pairing (or, with the meter switched off, hold the OK button until the Bluetooth symbol flashes)."),
         ("number.square", "Enter the PIN",
-         "In Settings ▸ Add Meter, tap your meter. iOS asks for a PIN – type the 6-digit code shown on the meter display."),
+         "Tap the gear icon ▸ Add Meter, then tap your meter. iOS asks for a PIN – type the 6-digit code shown on the meter display."),
         ("bolt.horizontal.circle", "Stay connected",
          "Keep GlucoRelay installed and Bluetooth on. After each measurement the meter connects in the background and the reading is relayed within seconds.")
     ]

@@ -4,8 +4,13 @@ import SwiftData
 struct HistoryView: View {
     @AppStorage(GlucoseUnit.storageKey) private var unitRaw = GlucoseUnit.mmolL.rawValue
     @Query(sort: \GlucoseReading.timestamp, order: .reverse) private var readings: [GlucoseReading]
+    @Query private var devices: [DeviceRecord]
 
     private var unit: GlucoseUnit { GlucoseUnit(rawValue: unitRaw) ?? .mmolL }
+
+    private func deviceName(for id: UUID) -> String? {
+        devices.first { $0.id == id }?.displayName
+    }
 
     private var hasFailedUploads: Bool {
         readings.contains { !$0.nightscoutSynced && $0.nightscoutRetryCount >= SyncQueue.maxNightscoutRetries }
@@ -37,7 +42,8 @@ struct HistoryView: View {
                         ForEach(sections, id: \.day) { section in
                             Section {
                                 ForEach(section.items) { reading in
-                                    HistoryRow(reading: reading, unit: unit)
+                                    HistoryRow(reading: reading, unit: unit,
+                                               deviceName: deviceName(for: reading.peripheralUUID))
                                         .listRowBackground(Theme.card)
                                 }
                             } header: {
@@ -66,26 +72,33 @@ struct HistoryView: View {
 struct HistoryRow: View {
     let reading: GlucoseReading
     let unit: GlucoseUnit
+    let deviceName: String?
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(reading.timestamp, format: .dateTime.hour().minute())
+                Text(reading.timestamp, format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
                     .font(.headline.monospacedDigit())
-                SerialBadge(serial: reading.serialNumber)
+                if let deviceName {
+                    Text(deviceName)
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(1)
+                }
             }
             Spacer()
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(unit.format(mgdL: reading.value))
-                    .font(.title2.bold().monospacedDigit())
-                    .foregroundStyle(Theme.crimson)
-                Text(unit.label)
-                    .font(.caption)
-                    .foregroundStyle(Theme.secondaryText)
+            HStack(spacing: 12) {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(unit.format(mgdL: reading.value))
+                        .font(.title.bold().monospacedDigit())
+                        .foregroundStyle(.white)
+                    Text(unit.label)
+                        .font(.caption2)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                SyncIcons(healthKit: reading.healthKitSynced, nightscout: reading.nightscoutSynced,
+                          nightscoutFailed: reading.nightscoutRetryCount >= SyncQueue.maxNightscoutRetries)
             }
-            SyncIcons(healthKit: reading.healthKitSynced, nightscout: reading.nightscoutSynced,
-                      nightscoutFailed: reading.nightscoutRetryCount >= SyncQueue.maxNightscoutRetries)
-                .frame(width: 52, alignment: .trailing)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)

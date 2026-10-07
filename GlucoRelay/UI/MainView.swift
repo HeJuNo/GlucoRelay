@@ -7,6 +7,7 @@ struct MainView: View {
     @Query(sort: \DeviceRecord.addedAt) private var devices: [DeviceRecord]
     @Query(MainView.recentDescriptor) private var recent: [GlucoseReading]
     @State private var showPairing = false
+    @State private var showSettings = false
 
     private static var recentDescriptor: FetchDescriptor<GlucoseReading> {
         var d = FetchDescriptor<GlucoseReading>(sortBy: [SortDescriptor(\.timestamp, order: .reverse)])
@@ -40,7 +41,16 @@ struct MainView: View {
             .refreshable { ble.syncAll() }
             .background(Theme.backgroundGradient.ignoresSafeArea())
             .navigationTitle("GlucoRelay")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape.fill")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+            }
             .sheet(isPresented: $showPairing) { PairingView() }
+            .sheet(isPresented: $showSettings) { SettingsView() }
         }
     }
 
@@ -163,21 +173,16 @@ struct LatestReadingCard: View {
                 Text(unit.format(mgdL: reading.value))
                     .font(.system(size: 96, weight: .bold, design: .rounded))
                     .monospacedDigit()
-                    .foregroundStyle(Theme.crimson)
-                    .shadow(color: Theme.crimson.opacity(0.5), radius: 16)
+                    .foregroundStyle(.white)
                     .contentTransition(.numericText())
                 Text(unit.label)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(Theme.secondaryText)
             }
-            Text(reading.timestamp, format: .dateTime.weekday(.abbreviated).day().month().hour().minute())
+            Text(readingDateText(reading.timestamp))
                 .font(.headline)
-            Text(reading.timestamp, format: .relative(presentation: .named))
-                .font(.subheadline)
-                .foregroundStyle(Theme.secondaryText)
             HStack(spacing: 10) {
-                if let deviceName { Text(deviceName).font(.caption) }
-                SerialBadge(serial: reading.serialNumber)
+                if let deviceName { Text(deviceName).font(.caption).lineLimit(1) }
                 SyncIcons(healthKit: reading.healthKitSynced, nightscout: reading.nightscoutSynced,
                           nightscoutFailed: reading.nightscoutRetryCount >= SyncQueue.maxNightscoutRetries)
             }
@@ -187,4 +192,20 @@ struct LatestReadingCard: View {
         .padding(.vertical, 12)
         .card()
     }
+}
+
+/// "Today, HH:mm" / "Yesterday, HH:mm" / "dd.MM.yyyy, HH:mm".
+func readingDateText(_ date: Date, now: Date = .now, calendar: Calendar = .current) -> String {
+    func format(_ pattern: String) -> String {
+        let f = DateFormatter()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = pattern
+        return f.string(from: date)
+    }
+    if calendar.isDate(date, inSameDayAs: now) { return "Today, \(format("HH:mm"))" }
+    if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+       calendar.isDate(date, inSameDayAs: yesterday) { return "Yesterday, \(format("HH:mm"))" }
+    return format("dd.MM.yyyy, HH:mm")
 }

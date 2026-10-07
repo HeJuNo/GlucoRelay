@@ -45,9 +45,16 @@ struct NightscoutEntry: Sendable {
 
 struct ConnectionTestResult: Sendable {
     var ok: Bool
-    var message: String
-    var subject: String?
-    var serverInfo: String?
+    var message: String         // short summary
+    var serverReachable: Bool = false
+    var serverReachableDetail: String = ""
+    var serverInfo: String? = nil
+    var tokenValid: Bool = false
+    var tokenSubject: String? = nil   // access token name/subject
+    var canRead: Bool = false
+    var canReadDetail: String = ""
+    var canWrite: Bool = false
+    var canWriteDetail: String = ""
 }
 
 /// Nightscout access exactly as nightscout-remote does it: the access token is exchanged for a
@@ -185,40 +192,95 @@ enum NightscoutSync {
 
     // MARK: Connection test
 
+    /// Mirrors nightscout-remote's NightscoutService.testConnection: token exchange (reachability +
+    /// token validity), server info, a real read and the write permission derived from the token's
+    /// roles. Nothing is written during the test.
     static func testConnection(urlString: String, token rawToken: String) async -> ConnectionTestResult {
+        var result = ConnectionTestResult(ok: false, message: "")
         let base = normalizedBase(urlString)
         let token = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
         await cache.set(nil)
-        guard !base.isEmpty else { return .init(ok: false, message: NightscoutError.noURL.localizedDescription) }
-        guard !token.isEmpty else { return .init(ok: false, message: NightscoutError.noToken.localizedDescription) }
 
+        guard !base.isEmpty, let statusURL = URL(string: "\(base)/api/v1/status.json"), statusURL.host != nil else {
+            result.serverReachableDetail = base.isEmpty ? NightscoutError.noURL.localizedDescription : "Invalid URL"
+            result.message = result.serverReachableDetail
+            return result
+        }
+        guard !token.isEmpty else {
+            result.serverReachableDetail = "Not tested"
+            result.message = NightscoutError.noToken.localizedDescription
+            return result
+        }
+
+        // 1) Access token -> JWT (also proves the server is reachable)
         let auth: AuthSession
         do {
             auth = try await authorize(base: base, token: token)
-        } catch NightscoutError.serverError(404) {
-            return .init(ok: false, message: "No Nightscout (with API v2) found at this URL (HTTP 404).")
+            result.serverReachable = true
+            result.serverReachableDetail = "Server reachable"
+            result.tokenValid = true
+            result.tokenSubject = auth.subject
+        } catch NightscoutError.invalidToken {
+            result.serverReachable = true
+            result.serverReachableDetail = "Server reachable"
+            result.canReadDetail = "Access token not recognised – copy it exactly from Nightscout ▸ Admin Tools"
+            result.canWriteDetail = result.canReadDetail
+            result.message = NightscoutError.invalidToken.localizedDescription
+            return result
+        } catch NightscoutError.serverError(let code) {
+            result.serverReachableDetail = code == 404
+                ? "No Nightscout (or a version without API v2) at this URL (HTTP 404)"
+                : "Server responded with HTTP \(code)"
+            result.message = result.serverReachableDetail
+            return result
         } catch {
-            return .init(ok: false, message: error.localizedDescription)
+            result.serverReachableDetail = error.localizedDescription
+            result.message = result.serverReachableDetail
+            return result
         }
 
-        var serverInfo: String?
-        if let statusURL = URL(string: "\(base)/api/v1/status.json") {
-            var req = URLRequest(url: statusURL)
-            req.setValue("Bearer \(auth.jwt)", forHTTPHeaderField: "Authorization")
-            req.setValue("application/json", forHTTPHeaderField: "Accept")
-            if let resp = try? await perform(req), (200..<300).contains(resp.1.statusCode),
-               let json = try? JSONSerialization.jsonObject(with: resp.0) as? [String: Any] {
-                serverInfo = "\(json["name"] as? String ?? "Nightscout") \(json["version"] as? String ?? "")"
-            }
+        // 2) Server info
+        if let resp = try? await perform(bearer(statusURL, jwt: auth.jwt)),
+           (200..<300).contains(resp.1.statusCode),
+           let json = try? JSONSerialization.jsonObject(with: resp.0) as? [String: Any] {
+            let name = json["name"] as? String ?? "Nightscout"
+            let version = json["version"] as? String ?? "?"
+            result.serverInfo = "\(name) \(version)"
         }
 
-        let canWrite = permits(auth.permissions, "api:entries:create")
+        // 3) Read: real read of the latest entry; token permission as fallback
+        let readPermitted = permits(auth.permissions, "api:entries:read")
+        if let readURL = URL(string: "\(base)/api/v1/entries.json?count=1"),
+           let resp = try? await perform(bearer(readURL, jwt: auth.jwt)) {
+            result.canRead = (200..<300).contains(resp.1.statusCode)
+        } else {
+            result.canRead = readPermitted
+        }
+
+        // 4) Write: derived from the token's permissions
+        result.canWrite = permits(auth.permissions, "api:entries:create")
+
         let roles = auth.permissions.isEmpty ? "none" : auth.permissions.joined(separator: ", ")
-        return .init(ok: canWrite,
-                     message: canWrite
-                        ? "Connected – token can write glucose entries."
-                        : "Token is valid but cannot write entries. Give it the roles readable + careportal (has: \(roles)).",
-                     subject: auth.subject, serverInfo: serverInfo)
+        result.canReadDetail = result.canRead
+            ? "Glucose entries can be read"
+            : "No read access – give the token e.g. the role “readable” (has: \(roles))"
+        result.canWriteDetail = result.canWrite
+            ? "Glucose entries can be written"
+            : "No write access – give the token e.g. the role “careportal” (has: \(roles))"
+
+        result.ok = result.serverReachable && result.tokenValid && result.canRead && result.canWrite
+        result.message = result.ok
+            ? "Connected – token can read and write glucose entries."
+            : (result.canWrite ? result.canReadDetail : result.canWriteDetail)
+        return result
+    }
+
+    private static func bearer(_ url: URL, jwt: String) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        return req
     }
 
     // MARK: Helpers

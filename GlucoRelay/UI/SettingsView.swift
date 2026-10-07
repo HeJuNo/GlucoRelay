@@ -79,19 +79,38 @@ struct SettingsView: View {
             .disabled(testing || nsURL.isEmpty || nsToken.isEmpty)
 
             if let result = testResult {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(result.message, systemImage: result.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
-                        .foregroundStyle(result.ok ? Theme.connected : Theme.crimson)
-                    if let info = result.serverInfo { Text(info).font(.caption).foregroundStyle(Theme.secondaryText) }
-                    if let subject = result.subject { Text("Token subject: \(subject)").font(.caption).foregroundStyle(Theme.secondaryText) }
+                testRow("Server reachable", ok: result.serverReachable, detail: result.serverReachableDetail)
+                if let info = result.serverInfo {
+                    testRow("Server", ok: nil, detail: info)
                 }
-                .font(.subheadline)
+                testRow("Access token", ok: result.serverReachable ? result.tokenValid : nil,
+                        detail: result.tokenSubject ?? (result.tokenValid ? "Valid" : (result.serverReachable ? "Invalid" : "Not tested")))
+                testRow("Read access", ok: result.tokenValid ? result.canRead : nil,
+                        detail: result.canReadDetail.isEmpty ? "Not tested" : result.canReadDetail)
+                testRow("Write access", ok: result.tokenValid ? result.canWrite : nil,
+                        detail: result.canWriteDetail.isEmpty ? "Not tested" : result.canWriteDetail)
             }
         } header: {
             Text("Nightscout")
         } footer: {
             Text("Create an access token in Nightscout ▸ Admin Tools with the roles **readable** and **careportal**. URL and token are stored in the iOS Keychain. Readings are always uploaded in mg/dL.")
         }
+    }
+
+    /// One row of the connection test: status icon + label, detail on the right.
+    /// `ok == nil` = not tested / informational.
+    private func testRow(_ label: String, ok: Bool?, detail: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: ok == nil ? "questionmark.circle.fill" : (ok! ? "checkmark.circle.fill" : "xmark.circle.fill"))
+                .foregroundStyle(ok == nil ? Theme.idle : (ok! ? Theme.connected : Theme.crimson))
+            Text(label)
+            Spacer(minLength: 12)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
     }
 
     private func saveCredentials() {
