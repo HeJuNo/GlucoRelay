@@ -36,23 +36,15 @@ final class HealthKitSync {
     func requestAuthorization() async {
         guard isAvailable else { status = .unavailable; return }
         do {
-            try await store.requestAuthorization(toShare: [glucoseType], read: [glucoseType])
+            // toShare: we write BG readings from the meter.
+            // read: [] — we never read other sources; requesting read access for blood glucose
+            // without Apple's special entitlement silently blocks the entire auth sheet.
+            try await store.requestAuthorization(toShare: [glucoseType], read: [])
             logger.info("HealthKit authorization request completed")
         } catch {
             logger.error("Authorization failed: \(error.localizedDescription)")
         }
         refreshStatus()
-        await enableBackgroundDelivery()
-    }
-
-    /// Requested per spec; only effective once read access has been granted.
-    func enableBackgroundDelivery() async {
-        guard isAvailable else { return }
-        do {
-            try await store.enableBackgroundDelivery(for: glucoseType, frequency: .immediate)
-        } catch {
-            logger.notice("Background delivery not enabled: \(error.localizedDescription)")
-        }
     }
 
     enum SaveError: Error { case notAuthorized, databaseLocked }
