@@ -37,6 +37,7 @@ final class HealthKitSync {
         guard isAvailable else { status = .unavailable; return }
         do {
             try await store.requestAuthorization(toShare: [glucoseType], read: [glucoseType])
+            logger.info("HealthKit authorization request completed")
         } catch {
             logger.error("Authorization failed: \(error.localizedDescription)")
         }
@@ -58,8 +59,9 @@ final class HealthKitSync {
 
     /// Saves one reading. The sync identifier "<serial>-<sequence>" makes re-saves idempotent.
     func save(mgdL: Double, date: Date, serialNumber: String, sequenceNumber: Int) async throws {
-        refreshStatus()
-        guard status == .authorized else { throw SaveError.notAuthorized }
+        // No status pre-check: HealthKit hides denied access behind .notDetermined (privacy),
+        // so the store itself decides whether the write is allowed.
+        guard isAvailable else { throw SaveError.notAuthorized }
 
         let device = HKDevice(name: "Accu-Chek Guide", manufacturer: "Roche", model: "Guide",
                               hardwareVersion: nil, firmwareVersion: nil, softwareVersion: nil,
@@ -75,9 +77,17 @@ final class HealthKitSync {
         do {
             try await store.save(sample)
             logger.info("Saved \(mgdL) mg/dL SN \(serialNumber) #\(sequenceNumber)")
-        } catch let error as HKError where error.code == .errorDatabaseInaccessible {
-            // Phone is locked – retried when protected data becomes available.
-            throw SaveError.databaseLocked
+        } catch let error as HKError {
+            switch error.code {
+            case .errorDatabaseInaccessible:
+                // Phone is locked – retried when protected data becomes available.
+                throw SaveError.databaseLocked
+            case .errorAuthorizationDenied, .errorAuthorizationNotDetermined:
+                logger.warning("HealthKit save rejected – not authorized (\(error.code.rawValue))")
+                throw SaveError.notAuthorized
+            default:
+                throw error
+            }
         }
     }
 }
