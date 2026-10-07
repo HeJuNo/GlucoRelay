@@ -1,0 +1,4 @@
+# Values come from the GitHub Actions secrets/variables (TEAMID, BUNDLE_ID).
+app_identifier(ENV["BUNDLE_ID"].to_s.strip.empty? ? "com.#{ENV['TEAMID']}.glucorelay" : ENV["BUNDLE_ID"].strip)
+team_id(ENV["TEAMID"])
+itc_team_id(ENV["TEAMID"])

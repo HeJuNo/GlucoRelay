@@ -1,0 +1,63 @@
+name: 4. GlucoRelay bauen
+run-name: GlucoRelay bauen (${{ github.ref_name }})
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Am 1. jedes Monats um 06:17 UTC neu bauen, damit der TestFlight-Build
+    # (90 Tage gueltig) nie ablaeuft. Abschalten: Variable SCHEDULED_BUILD=false.
+    - cron: "17 6 1 * *"
+
+jobs:
+  check_certs:
+    name: Zertifikate pruefen
+    if: github.event_name == 'workflow_dispatch' || vars.SCHEDULED_BUILD != 'false'
+    uses: ./.github/workflows/create_certs.yml
+    secrets: inherit
+
+  build:
+    name: Bauen und hochladen
+    needs: check_certs
+    runs-on: macos-26
+    env:
+      TEAMID: ${{ secrets.TEAMID }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      FASTLANE_KEY_ID: ${{ secrets.FASTLANE_KEY_ID }}
+      FASTLANE_ISSUER_ID: ${{ secrets.FASTLANE_ISSUER_ID }}
+      FASTLANE_KEY: ${{ secrets.FASTLANE_KEY }}
+      BUNDLE_ID: ${{ vars.BUNDLE_ID }}
+      APP_VERSION: ${{ vars.APP_VERSION }}
+    steps:
+      - name: Xcode auswaehlen
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/checkout@v5
+
+      - name: Xcode-Projekt erzeugen (XcodeGen)
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Abhaengigkeiten installieren
+        run: bundle install
+
+      - name: Uhr synchronisieren
+        run: sudo sntp -sS time.windows.com
+
+      - name: Signierte IPA bauen
+        run: bundle exec fastlane build
+
+      - name: Zu TestFlight hochladen
+        run: bundle exec fastlane release
+
+      - name: Build-Protokoll und IPA sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            artifacts
+            buildlog

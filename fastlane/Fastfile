@@ -1,0 +1,210 @@
+# fastlane configuration for the GitHub browser build of GlucoRelay.
+# Mirrors HeJuNo/nightscout-remote (itself modelled on LoopKit/LoopWorkspace),
+# extended with the HealthKit capability GlucoRelay needs.
+
+require "base64"
+
+default_platform(:ios)
+
+TEAMID                  = ENV["TEAMID"]
+GH_PAT                  = ENV["GH_PAT"]
+GITHUB_WORKSPACE        = ENV["GITHUB_WORKSPACE"] || File.expand_path("..", __dir__)
+GITHUB_REPOSITORY_OWNER = ENV["GITHUB_REPOSITORY_OWNER"] || "HeJuNo"
+FASTLANE_KEY_ID         = ENV["FASTLANE_KEY_ID"]
+FASTLANE_ISSUER_ID      = ENV["FASTLANE_ISSUER_ID"]
+FASTLANE_KEY            = ENV["FASTLANE_KEY"]
+
+# Bundle ID: repository variable BUNDLE_ID or com.<TEAMID>.glucorelay
+BUNDLE_ID = (ENV["BUNDLE_ID"].to_s.strip.empty? ? "com.#{TEAMID}.glucorelay" : ENV["BUNDLE_ID"].strip)
+APP_NAME  = "GlucoRelay"
+TARGET    = "GlucoRelay"
+PROJECT   = "#{GITHUB_WORKSPACE}/GlucoRelay.xcodeproj"
+IPA_NAME  = "GlucoRelay.ipa"
+
+ENV["FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT"] = "120"
+
+def asc_api_key
+  app_store_connect_api_key(
+    key_id: FASTLANE_KEY_ID,
+    issuer_id: FASTLANE_ISSUER_ID,
+    key_content: FASTLANE_KEY
+  )
+end
+
+def match_auth
+  Base64.strict_encode64("#{GITHUB_REPOSITORY_OWNER}:#{GH_PAT}")
+end
+
+# Creates the bundle ID if needed and makes sure the HealthKit capability is enabled.
+# Returns true if anything changed (then the provisioning profile must be regenerated).
+def ensure_bundle_id_with_healthkit
+  changed = false
+  bundle_id = Spaceship::ConnectAPI::BundleId.find(BUNDLE_ID)
+  if bundle_id
+    UI.success("Bundle ID #{BUNDLE_ID} already exists.")
+  else
+    bundle_id = Spaceship::ConnectAPI::BundleId.create(
+      name: APP_NAME,
+      identifier: BUNDLE_ID,
+      platform: "IOS"
+    )
+    UI.success("Bundle ID #{BUNDLE_ID} created.")
+    changed = true
+  end
+
+  healthkit = Spaceship::ConnectAPI::BundleIdCapability::Type::HEALTHKIT
+  has_healthkit = bundle_id.get_capabilities.any? { |c| c.capability_type == healthkit }
+  if has_healthkit
+    UI.success("HealthKit capability already enabled.")
+  else
+    bundle_id.create_capability(healthkit)
+    UI.success("HealthKit capability enabled for #{BUNDLE_ID}.")
+    changed = true
+  end
+  changed
+end
+
+platform :ios do
+
+  desc "Create the bundle ID at Apple and enable HealthKit"
+  lane :identifiers do
+    setup_ci if ENV["CI"]
+    asc_api_key
+    ensure_bundle_id_with_healthkit
+  end
+
+  desc "Create/refresh the distribution certificate and App Store profile"
+  lane :certs do
+    setup_ci if ENV["CI"]
+    ENV["MATCH_READONLY"] = false.to_s
+    asc_api_key
+
+    # Regenerate the profile if the HealthKit capability was only just added.
+    profile_outdated = ensure_bundle_id_with_healthkit
+
+    match(
+      type: "appstore",
+      force: profile_outdated,
+      verbose: true,
+      git_basic_authorization: match_auth,
+      app_identifier: [BUNDLE_ID]
+    )
+  end
+
+  desc "Validate secrets (Apple API access and Match-Secrets decryption)"
+  lane :validate_secrets do
+    setup_ci if ENV["CI"]
+    ENV["MATCH_READONLY"] = true.to_s
+    asc_api_key
+
+    Spaceship::ConnectAPI::BundleId.find(BUNDLE_ID)
+
+    match(
+      type: "appstore",
+      git_basic_authorization: match_auth,
+      app_identifier: []
+    )
+  end
+
+  desc "Revoke all distribution certificates and profiles (only when needed)"
+  lane :nuke_certs do
+    setup_ci if ENV["CI"]
+    ENV["MATCH_READONLY"] = false.to_s
+    asc_api_key
+
+    match_nuke(
+      type: "appstore",
+      team_id: TEAMID,
+      skip_confirmation: true,
+      git_basic_authorization: match_auth
+    )
+  end
+
+  desc "Check whether a valid distribution certificate exists"
+  lane :check_and_renew_certificates do
+    setup_ci if ENV["CI"]
+    asc_api_key
+
+    certificates = Spaceship::ConnectAPI::Certificate.all
+    distribution = certificates.select { |c| c.certificate_type == "DISTRIBUTION" }
+
+    needed = distribution.empty? || distribution.all? { |c| Time.parse(c.expiration_date) < Time.now }
+    distribution.each do |c|
+      UI.message("Distribution certificate #{c.id}, valid until #{c.expiration_date}")
+    end
+
+    file_path = File.expand_path("new_certificate_needed.txt")
+    File.write(file_path, needed ? "true" : "false")
+    UI.message("New certificate needed: #{needed}")
+  end
+
+  desc "Build a signed IPA"
+  lane :build do
+    setup_ci if ENV["CI"]
+    api_key = asc_api_key
+
+    previous = latest_testflight_build_number(
+      app_identifier: BUNDLE_ID,
+      api_key: api_key,
+      initial_build_number: 0
+    )
+    build_number = previous + 1
+    UI.message("Build number: #{build_number}")
+
+    match(
+      type: "appstore",
+      readonly: true,
+      git_basic_authorization: match_auth,
+      app_identifier: [BUNDLE_ID]
+    )
+
+    mapping = Actions.lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING]
+    profile_name = mapping[BUNDLE_ID] # "match AppStore com.<TEAMID>.glucorelay"
+
+    update_code_signing_settings(
+      path: PROJECT,
+      use_automatic_signing: false,
+      team_id: TEAMID,
+      bundle_identifier: BUNDLE_ID,
+      profile_name: profile_name,
+      code_sign_identity: "iPhone Distribution",
+      targets: [TARGET]
+    )
+
+    xcargs = "CURRENT_PROJECT_VERSION=#{build_number}"
+    app_version = ENV["APP_VERSION"].to_s.strip
+    xcargs += " MARKETING_VERSION=#{app_version}" unless app_version.empty?
+
+    build_app(
+      project: PROJECT,
+      scheme: TARGET,
+      configuration: "Release",
+      export_method: "app-store",
+      output_name: IPA_NAME,
+      destination: "generic/platform=iOS",
+      buildlog_path: "buildlog",
+      xcargs: xcargs,
+      export_options: {
+        provisioningProfiles: { BUNDLE_ID => profile_name }
+      }
+    )
+
+    copy_artifacts(
+      target_path: "artifacts",
+      artifacts: ["*.mobileprovision", "*.ipa", "*.dSYM.zip"]
+    )
+  end
+
+  desc "Upload the IPA to TestFlight"
+  lane :release do
+    api_key = asc_api_key
+
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: BUNDLE_ID,
+      ipa: IPA_NAME,
+      skip_submission: false,
+      skip_waiting_for_build_processing: true
+    )
+  end
+end

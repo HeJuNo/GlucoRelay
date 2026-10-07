@@ -1,0 +1,24 @@
+# Generiert durch XcodeGen
+*.xcodeproj/
+Info.plist
+# Xcode
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.mobileprovision
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output
+fastlane/new_certificate_needed.txt
+artifacts/
+buildlog/
+# Ruby
+vendor/
+.bundle/
+# macOS
+.DS_Store

@@ -1,0 +1,35 @@
+name: 2. Bundle-ID anlegen + HealthKit aktivieren
+run-name: Bundle-ID anlegen (${{ github.ref_name }})
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Secrets pruefen
+    uses: ./.github/workflows/validate_secrets.yml
+    secrets: inherit
+
+  identifiers:
+    name: Bundle-ID anlegen + HealthKit aktivieren
+    needs: validate
+    runs-on: macos-26
+    env:
+      TEAMID: ${{ secrets.TEAMID }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      FASTLANE_KEY_ID: ${{ secrets.FASTLANE_KEY_ID }}
+      FASTLANE_ISSUER_ID: ${{ secrets.FASTLANE_ISSUER_ID }}
+      FASTLANE_KEY: ${{ secrets.FASTLANE_KEY }}
+      BUNDLE_ID: ${{ vars.BUNDLE_ID }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Abhaengigkeiten installieren
+        run: bundle install
+
+      - name: Uhr synchronisieren
+        run: sudo sntp -sS time.windows.com
+
+      - name: Bundle-ID anlegen + HealthKit aktivieren
+        run: bundle exec fastlane identifiers

@@ -1,0 +1,68 @@
+# XcodeGen project definition – `xcodegen generate` creates GlucoRelay.xcodeproj
+name: GlucoRelay
+options:
+  bundleIdPrefix: com.example
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    VERSIONING_SYSTEM: apple-generic
+targets:
+  GlucoRelay:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: GlucoRelay
+        excludes:
+          - Info.plist
+    scheme:
+      testTargets:
+        - GlucoRelayTests
+    settings:
+      base:
+        # Placeholder for local builds. The GitHub build sets
+        # com.<TEAMID>.glucorelay (or the repository variable BUNDLE_ID),
+        # the team and the match AppStore profile via fastlane.
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.glucorelay
+        PRODUCT_NAME: GlucoRelay
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+    entitlements:
+      path: GlucoRelay.entitlements
+    info:
+      path: GlucoRelay/Info.plist
+      properties:
+        CFBundleDisplayName: GlucoRelay
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UIBackgroundModes: [bluetooth-central]
+        NSBluetoothAlwaysUsageDescription: "GlucoRelay needs Bluetooth to connect to your Accu-Chek Guide meter."
+        NSHealthShareUsageDescription: "GlucoRelay reads blood glucose data from HealthKit."
+        NSHealthUpdateUsageDescription: "GlucoRelay saves blood glucose readings from your meter to HealthKit."
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIUserInterfaceStyle: Dark
+        ITSAppUsesNonExemptEncryption: false
+
+  GlucoRelayTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - GlucoRelayTests
+      # The parser is pure Foundation code, so it is compiled straight into the test bundle.
+      - GlucoRelay/BLE/GATTParser.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.glucorelay.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic

@@ -1,0 +1,78 @@
+name: 3. Zertifikate erstellen
+run-name: Zertifikate erstellen (${{ github.ref_name }})
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  TEAMID: ${{ secrets.TEAMID }}
+  GH_PAT: ${{ secrets.GH_PAT }}
+  MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+  FASTLANE_KEY_ID: ${{ secrets.FASTLANE_KEY_ID }}
+  FASTLANE_ISSUER_ID: ${{ secrets.FASTLANE_ISSUER_ID }}
+  FASTLANE_KEY: ${{ secrets.FASTLANE_KEY }}
+  BUNDLE_ID: ${{ vars.BUNDLE_ID }}
+
+jobs:
+  validate:
+    name: Secrets pruefen
+    uses: ./.github/workflows/validate_secrets.yml
+    secrets: inherit
+
+  create_certs:
+    name: Zertifikate
+    needs: validate
+    runs-on: macos-26
+    outputs:
+      new_certificate_needed: ${{ steps.set_output.outputs.new_certificate_needed }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Abhaengigkeiten installieren
+        run: bundle install
+
+      - name: Uhr synchronisieren
+        run: sudo sntp -sS time.windows.com
+
+      - name: Zertifikat und Profil erstellen/aktualisieren
+        run: bundle exec fastlane certs || true
+
+      - name: Gueltigkeit des Zertifikats pruefen
+        run: bundle exec fastlane check_and_renew_certificates
+
+      - name: Ergebnis auswerten
+        id: set_output
+        run: |
+          FILE="${{ github.workspace }}/fastlane/new_certificate_needed.txt"
+          STATUS=$( [ -f "$FILE" ] && tr -d '\r\n' < "$FILE" || echo false )
+          echo "new_certificate_needed=$STATUS" >> "$GITHUB_OUTPUT"
+          ENABLE=$(echo "${{ vars.ENABLE_NUKE_CERTS }}" | tr '[:upper:]' '[:lower:]')
+          if [ "$STATUS" = "true" ] && [ "$ENABLE" != "true" ]; then
+            echo "::error::Kein gueltiges Distribution-Zertifikat. Automatische Erneuerung ist aus – Variable ENABLE_NUKE_CERTS=true setzen und erneut starten."
+            exit 1
+          fi
+
+  nuke_certs:
+    name: Zertifikate erneuern
+    needs: [validate, create_certs]
+    runs-on: macos-26
+    if: ${{ (needs.create_certs.outputs.new_certificate_needed == 'true' && vars.ENABLE_NUKE_CERTS == 'true') || vars.FORCE_NUKE_CERTS == 'true' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Abhaengigkeiten installieren
+        run: bundle install
+
+      - name: Uhr synchronisieren
+        run: sudo sntp -sS time.windows.com
+
+      - name: Alte Zertifikate widerrufen
+        run: bundle exec fastlane nuke_certs
+
+      - name: Neues Zertifikat erstellen
+        run: bundle exec fastlane certs
+
+      - name: Hinweis
+        run: |
+          echo "::warning::Alle Distribution-Zertifikate wurden widerrufen und neu erstellt. Andere Apps aus demselben Match-Secrets (z.B. Loop) nutzen beim naechsten Build automatisch das neue Zertifikat. Bestehende TestFlight-Builds funktionieren weiter."
